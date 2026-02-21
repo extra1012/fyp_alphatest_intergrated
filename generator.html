@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Question Generator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", system-ui, sans-serif; }
+    body { margin: 0; background: #0b0f1a; color: #e8ecf2; }
+    header { padding: 16px 20px; border-bottom: 1px solid #1c2536; }
+    main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    section { background: #101725; border: 1px solid #1c2536; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; margin-bottom: 8px; font-weight: 600; }
+    textarea, input, button { width: 100%; box-sizing: border-box; font-size: 15px; }
+    textarea { min-height: 120px; padding: 10px; border-radius: 8px; border: 1px solid #243047; background: #0f1623; color: #e8ecf2; }
+    input[type="number"] { padding: 8px; border-radius: 8px; border: 1px solid #243047; background: #0f1623; color: #e8ecf2; }
+    button { margin-top: 10px; padding: 10px 14px; border-radius: 8px; border: 1px solid #2f80ed; background: linear-gradient(90deg, #2f80ed, #56ccf2); color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+    .question { border: 1px solid #1f2a3d; border-radius: 8px; padding: 12px; margin-bottom: 10px; background: #0f1623; }
+    .options { margin: 8px 0 0; padding-left: 16px; }
+    .status { padding: 8px 10px; border-radius: 6px; border: 1px solid #1f2a3d; background: #0f1623; font-size: 14px; }
+    .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; border: 1px solid #2f80ed; color: #8dc8ff; font-size: 12px; }
+    .pill { padding: 6px 10px; border-radius: 8px; background: #112033; border: 1px solid #1f2a3d; font-size: 13px; }
+    .divider { height: 1px; background: #1c2536; margin: 14px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="flex">
+      <div class="badge">Gemini → Gate</div>
+      <div class="pill" id="status">Idle</div>
+      <div class="pill" id="note"></div>
+      <div style="flex:1"></div>
+      <button style="width:auto;padding:8px 12px;" onclick="window.location.href='index.html'">Go to Game</button>
+    </div>
+  </header>
+  <main>
+    <section>
+      <label for="prompt">Prompt / context for questions</label>
+      <textarea id="prompt" placeholder="Paste context or describe the topic..." spellcheck="false"></textarea>
+      <div class="row">
+        <div>
+          <label for="count">Number of questions</label>
+          <input type="number" id="count" min="1" max="30" value="8" />
+        </div>
+        <div>
+          <label for="fileInput">Source document (pdf/docx/pptx)</label>
+          <input type="file" id="fileInput" accept=".pdf,.docx,.pptx" />
+        </div>
+        <div style="display:flex; align-items:flex-end; gap:8px;">
+          <button id="generateBtn">Generate with Gemini</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="flex" style="justify-content: space-between;">
+        <div>
+          <strong>Generated questions</strong>
+          <span class="pill" id="savePath"></span>
+        </div>
+        <div class="flex">
+          <button id="saveBtn" disabled>Save selected</button>
+          <span class="pill" id="selectionInfo">0 selected</span>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div id="questions"></div>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const noteEl = document.getElementById('note');
+    const savePathEl = document.getElementById('savePath');
+    const selectionInfo = document.getElementById('selectionInfo');
+    const generateBtn = document.getElementById('generateBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const promptEl = document.getElementById('prompt');
+    const countEl = document.getElementById('count');
+    const fileInput = document.getElementById('fileInput');
+    const listEl = document.getElementById('questions');
+
+    let lastResult = null;
+
+    const setStatus = (text) => { statusEl.textContent = text; };
+
+    const renderQuestions = (result) => {
+      listEl.innerHTML = '';
+      saveBtn.disabled = true;
+      selectionInfo.textContent = '0 selected';
+      if (!result || !Array.isArray(result.questions)) return;
+      result.questions.forEach((q, idx) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'question';
+        const id = `q-${idx}`;
+        wrapper.innerHTML = `
+          <div class="flex" style="justify-content: space-between; gap:8px;">
+            <label for="${id}" style="flex:1;">${q.question || 'Untitled question'}</label>
+            <input type="checkbox" id="${id}" data-num="${q.question_number || idx + 1}" checked />
+          </div>
+          <ol class="options">
+            ${(q.options || []).map((opt) => `<li>${opt}</li>`).join('')}
+          </ol>
+        `;
+        listEl.appendChild(wrapper);
+      });
+      saveBtn.disabled = !result.questions.length;
+      selectionInfo.textContent = `${result.questions.length} selected`;
+    };
+
+    const getSelected = () => {
+      const boxes = listEl.querySelectorAll('input[type="checkbox"]');
+      return Array.from(boxes).filter((b) => b.checked).map((b) => Number(b.dataset.num));
+    };
+
+    listEl.addEventListener('change', () => {
+      const selected = getSelected();
+      selectionInfo.textContent = `${selected.length} selected`;
+    });
+
+    generateBtn.addEventListener('click', async () => {
+      setStatus('Generating...');
+      noteEl.textContent = '';
+      generateBtn.disabled = true;
+      saveBtn.disabled = true;
+      savePathEl.textContent = '';
+      try {
+        if (!fileInput.files[0]) {
+          setStatus('Please upload a pdf/docx/pptx file first');
+          generateBtn.disabled = false;
+          return;
+        }
+        const fd = new FormData();
+        fd.append('prompt', promptEl.value);
+        fd.append('count', Number(countEl.value) || 8);
+        if (fileInput.files[0]) {
+          fd.append('file', fileInput.files[0]);
+        }
+        const res = await fetch('/api/generate-questions', { method: 'POST', body: fd });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        lastResult = data.result;
+        renderQuestions(lastResult);
+        setStatus('Generated');
+        noteEl.textContent = [data.note || '', data.usedFile ? `File: ${data.usedFile}` : ''].filter(Boolean).join(' | ');
+        savePathEl.textContent = data.savedPath ? `Saved: ${data.savedPath}` : '';
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+      } finally {
+        generateBtn.disabled = false;
+      }
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      if (!lastResult) return;
+      const selected = getSelected();
+      setStatus('Saving selection...');
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch('/save-questions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            result_json: lastResult,
+            selected,
+            source_filename: 'gemini.json',
+          }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json().catch(() => null);
+        savePathEl.textContent = data?.savedPath || 'Saved selection';
+        setStatus('Saved');
+      } catch (err) {
+        setStatus(`Save error: ${err.message}`);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

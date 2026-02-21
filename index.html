@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quiz Runner</title>
+  <link rel="preconnect" href="https://cdn.babylonjs.com" />
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+  <style>
+    :root {
+      --bg: radial-gradient(circle at 20% 20%, #ff7a45 0%, #ff5c39 40%, #ff3b1f 100%);
+      --panel: rgba(15, 23, 42, 0.75);
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --accent-2: #f8c630;
+      --danger: #f25f5c;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; background: var(--bg); color: var(--text); overflow: hidden; }
+    #renderCanvas { width: 100%; height: 100%; touch-action: none; display: block; }
+
+    .panel { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 420px; max-width: 92vw; background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 16px; box-shadow: 0 18px 36px rgba(0,0,0,0.5); z-index: 12; backdrop-filter: blur(12px); }
+    .panel h1 { margin: 0 0 6px; font-size: 18px; }
+    .panel h2 { margin: 16px 0 6px; font-size: 14px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+    label { display: block; font-weight: 600; margin: 8px 0 4px; }
+    textarea, input { width: 100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); background: #0d1525; color: var(--text); padding: 10px; font-size: 14px; }
+    textarea { min-height: 110px; resize: vertical; }
+    input[type="number"] { max-width: 120px; }
+    button { cursor: pointer; border: none; border-radius: 10px; padding: 10px 14px; font-weight: 700; color: #04101f; background: linear-gradient(135deg, #38bdf8, #60c98f); box-shadow: 0 10px 18px rgba(56, 189, 248, 0.35); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+    button:hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(56, 189, 248, 0.45); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+    .btn-secondary { background: rgba(255,255,255,0.08); color: var(--text); box-shadow: none; border: 1px solid rgba(255,255,255,0.08); }
+    .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .status-line { margin-top: 10px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+    .status-dot.ok { background: #34d399; box-shadow: 0 0 10px rgba(52,211,153,0.7); }
+    .status-dot.err { background: var(--danger); box-shadow: 0 0 10px rgba(242,95,92,0.7); }
+    .question-list { max-height: 280px; overflow: auto; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; background: #0c1322; }
+    .question-item { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 8px; background: rgba(255,255,255,0.02); }
+    .question-item:last-child { margin-bottom: 0; }
+    .question-item strong { display: block; margin-bottom: 4px; }
+    .question-item ol { margin: 4px 0 0 18px; padding: 0; color: var(--muted); font-size: 13px; }
+    .panel-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+
+    .question-banner { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: var(--panel); padding: 10px 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 12px 26px rgba(0,0,0,0.35); z-index: 11; text-align: center; min-width: 320px; }
+    .question-banner small { color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+    .question-banner div { margin-top: 4px; font-size: 16px; }
+
+    .pill { position: fixed; right: 14px; top: 14px; padding: 10px 12px; border-radius: 12px; background: var(--panel); border: 1px solid rgba(255,255,255,0.08); z-index: 11; font-size: 14px; }
+
+    .result { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); background: var(--panel); border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; padding: 18px; box-shadow: 0 18px 36px rgba(0,0,0,0.45); z-index: 13; width: 360px; text-align: center; }
+    .hidden { display: none; }
+    .result h2 { margin: 0 0 8px; }
+    .result p { margin: 0 0 12px; color: var(--muted); }
+    .btn-group { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+    .helper { margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+    .hit-flash { position: fixed; inset: 0; pointer-events: none; background: rgba(56, 189, 248, 0.2); opacity: 0; transition: opacity 200ms ease; z-index: 10; }
+    .hit-flash.error { background: rgba(242, 95, 92, 0.22); }
+    .hit-flash.show { opacity: 1; }
+    .hit-text { position: fixed; left: 50%; top: 62%; transform: translate(-50%, -50%); padding: 10px 14px; border-radius: 12px; background: rgba(15,23,42,0.92); border: 1px solid rgba(255,255,255,0.08); color: #e5e7eb; font-weight: 800; letter-spacing: 0.02em; opacity: 0; transition: opacity 120ms ease; z-index: 12; box-shadow: 0 12px 26px rgba(0,0,0,0.35); }
+    .hit-text.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="setupPanel" class="panel">
+    <h1>Build your quiz run</h1>
+    <p class="helper">1) Generate a quiz with two-option questions. 2) Pick the questions you want. 3) Start the run and use touch or A/D to steer.</p>
+
+    <h2>Step 1: Upload</h2>
+    <label for="fileInputGame">Upload pdf / docx / pptx</label>
+    <input id="fileInputGame" type="file" accept=".pdf,.docx,.pptx" />
+    <div class="row">
+      <div>
+        <label for="countInput">Number of questions</label>
+        <input id="countInput" type="number" min="2" max="20" value="8" />
+      </div>
+      <button id="generateBtn">Generate quiz</button>
+    </div>
+
+    <h2>Step 2: Pick questions</h2>
+    <div id="questionList" class="question-list"></div>
+    <div class="panel-footer">
+      <span id="selectionCount">0 selected</span>
+      <div class="row" style="gap:8px;">
+        <button id="startBtn">Start game</button>
+        <button id="resetBtn" class="btn-secondary">Reset</button>
+      </div>
+    </div>
+    <div class="status-line"><span id="statusDot" class="status-dot"></span><span id="setupStatus">Waiting to generate</span></div>
+  </div>
+
+  <div class="question-banner">
+    <small id="questionNumber">Question --/--</small>
+    <div id="questionText">Generate and start the run to see questions here.</div>
+  </div>
+
+  <div class="pill" id="runStatus">Not started</div>
+
+  <div id="hitFlash" class="hit-flash hidden"></div>
+  <div id="hitText" class="hit-text hidden">Correct</div>
+
+  <div id="resultPanel" class="result hidden">
+    <h2>Run complete</h2>
+    <p id="scoreText">--</p>
+    <div class="btn-group">
+      <button id="retryBtn" class="btn-secondary">Replay</button>
+      <button id="surveyBtn">Open survey</button>
+    </div>
+  </div>
+
+  <canvas id="renderCanvas"></canvas>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
