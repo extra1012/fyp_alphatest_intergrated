@@ -10,21 +10,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(__dirname));
 
-const UPLOAD_FOLDER = 'uploads';
-const OUTPUT_FOLDER = 'generated';
+const OUTPUT_FOLDER = path.join(__dirname, 'generated');
 const MAX_SIZE = 16 * 1024 * 1024; // 16MB
 const ALLOWED_EXT = new Set(['pdf', 'docx', 'pptx']);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const PRESET_PROMPT = process.env.PRESET_PROMPT;
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_FOLDER),
-  filename: (_req, file, cb) => {
-    const safe = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
-    cb(null, `${Date.now()}_${safe}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -68,7 +61,7 @@ function extractJsonObject(text) {
 }
 
 // Placeholder generator; replace with real parsing/LLM logic if needed
-function generateQuestionsFromFile(_filepath, count = 10) {
+function generateQuestionsFromFile(_fileBuffer, count = 10) {
   return {
     total_question: count,
     questions: Array.from({ length: count }).map((_, i) =>
@@ -87,6 +80,9 @@ function generateQuestionsFromFile(_filepath, count = 10) {
 }
 
 function storeSelectedQuestions(resultData, selectedNumbers, sourceFilename) {
+  if (!OUTPUT_FOLDER || !fs.existsSync(OUTPUT_FOLDER)) {
+    return null;
+  }
   const set = new Set(selectedNumbers.map(Number));
   const filtered = (resultData.questions || []).filter((q) => set.has(Number(q.question_number ?? -1)));
   const out = { total_question: filtered.length, questions: filtered };
@@ -137,7 +133,7 @@ ${prompt || 'document only'}.`,
       },
     });
     const text = result?.response?.text?.() || '';
-    console.log('Gemini SDK raw response:', text);
+    //console.log('Gemini SDK raw response:', text); // test line
     parsed = extractJsonObject(text);
   } catch (sdkErr) {
     throw new Error(`Gemini SDK error: ${sdkErr.message}`);
@@ -188,12 +184,10 @@ app.post('/generate-game', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const questionNumbers = Number(req.body.question_numbers || 10);
   try {
-    const result = generateQuestionsFromFile(req.file.path, questionNumbers);
+    const result = generateQuestionsFromFile(req.file.buffer, questionNumbers);
     res.json({ message: `Generated ${result.total_question} questions`, result, filename: req.file.filename });
   } catch (err) {
     res.status(500).json({ error: `Processing failed: ${err.message}` });
-  } finally {
-    fs.unlink(req.file.path, () => {});
   }
 });
 
@@ -203,12 +197,20 @@ app.post('/api/generate-questions', upload.single('file'), async (req, res) => {
   if (!file) {
     return res.status(400).json({ error: 'Upload a pdf/docx/pptx file to generate questions' });
   }
+  /*console.log('generate-questions input:', {
+    prompt,
+    count,
+    filename: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size,
+  });
+  // test line 
+  */
   let docContext = null;
 
   if (file) {
     try {
-      const buf = fs.readFileSync(file.path);
-      const base64 = buf.toString('base64').slice(0, 4000); // truncate to keep payload small
+      const base64 = file.buffer.toString('base64').slice(0, 4000); // truncate to keep payload small
       docContext = {
         filename: file.originalname,
         mimetype: file.mimetype,
@@ -235,7 +237,7 @@ app.post('/api/generate-questions', upload.single('file'), async (req, res) => {
     });
   } catch (err) {
     console.error('Gemini generation failed, serving fallback', err);
-    const fallback = generateQuestionsFromFile(file.path, Number(count) || 10);
+    const fallback = generateQuestionsFromFile(file.buffer, Number(count) || 10);
     res.status(200).json({
       message: `Generated ${fallback.total_question} fallback questions`,
       result: fallback,
@@ -243,8 +245,6 @@ app.post('/api/generate-questions', upload.single('file'), async (req, res) => {
       usedFile: file ? file.originalname : null,
       warning: `Gemini generation failed: ${err.message}`,
     });
-  } finally {
-    if (file) fs.unlink(file.path, () => {});
   }
 });
 
@@ -258,13 +258,16 @@ app.post('/save-questions', (req, res) => {
     const parsed = typeof result_json === 'string' ? JSON.parse(result_json) : result_json;
     const savedPath = storeSelectedQuestions(parsed, selected, source_filename);
     const gid = Number(Date.now());
-    res.json({ message: 'Saved', gid, savedPath, selected: selected.map(Number) });
+    res.json({ message: savedPath ? 'Saved' : 'Saving skipped (persistence disabled)', gid, savedPath, selected: selected.map(Number) });
   } catch (err) {
     res.status(500).json({ error: `Save failed: ${err.message}` });
   }
 });
 
 app.get('/api/questions/latest', (_req, res) => {
+  if (!OUTPUT_FOLDER || !fs.existsSync(OUTPUT_FOLDER)) {
+    return res.status(404).json({ error: 'no questions available' });
+  }
   const files = fs.readdirSync(OUTPUT_FOLDER).filter((f) => f.endsWith('.json')).sort().reverse();
   if (!files.length) return res.status(404).json({ error: 'no questions available' });
   const data = JSON.parse(fs.readFileSync(path.join(OUTPUT_FOLDER, files[0]), 'utf-8'));
