@@ -42,6 +42,7 @@ const ui = {
   resultPanel: document.getElementById('resultPanel'),
   scoreText: document.getElementById('scoreText'),
   retryBtn: document.getElementById('retryBtn'),
+  regenBtn: document.getElementById('regenBtn'),
   surveyBtn: document.getElementById('surveyBtn'),
   hitFlash: document.getElementById('hitFlash'),
   hitText: document.getElementById('hitText'),
@@ -71,6 +72,7 @@ function bindUI() {
   ui.startBtn.addEventListener('click', startGameFromSelection);
   ui.resetBtn.addEventListener('click', resetSetup);
   ui.retryBtn.addEventListener('click', () => startGame(true));
+  ui.regenBtn.addEventListener('click', () => resetSetup());
   ui.surveyBtn.addEventListener('click', () => window.open(CONFIG.googleForm, '_blank'));
 
   if (ui.questionText) {

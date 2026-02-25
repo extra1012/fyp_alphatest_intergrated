@@ -15,7 +15,6 @@ const MAX_SIZE = 16 * 1024 * 1024; // 16MB
 const ALLOWED_EXT = new Set(['pdf', 'docx', 'pptx']);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const PRESET_PROMPT = process.env.PRESET_PROMPT;
 
 const storage = multer.memoryStorage();
 
@@ -27,10 +26,6 @@ const upload = multer({
     cb(null, ALLOWED_EXT.has(ext));
   },
 });
-
-function resolvePresetPrompt(preset, count) {
-  return (preset || '').replace(/\bx\b/gi, String(count));
-}
 
 function normalizeTwoOptionQuestion(q, idx = 0) {
   const opts = Array.isArray(q.options) ? q.options.slice(0, 2) : [];
@@ -226,9 +221,7 @@ app.post('/api/generate-questions', upload.single('file'), async (req, res) => {
       throw new Error('Gemini API key required');
     }
 
-    const resolvedPreset = resolvePresetPrompt(PRESET_PROMPT, Number(count) || 10);
-    const combinedPrompt = [resolvedPreset, prompt].filter(Boolean).join('\n\n');
-    const result = await generateQuestionsWithGemini(combinedPrompt, Number(count) || 10, docContext);
+    const result = await generateQuestionsWithGemini(prompt, Number(count) || 10, docContext);
     res.json({
       message: `Generated ${result.total_question} questions`,
       result,
