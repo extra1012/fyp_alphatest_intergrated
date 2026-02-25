@@ -13,8 +13,8 @@ app.use(express.static(__dirname));
 const OUTPUT_FOLDER = path.join(__dirname, 'generated');
 const MAX_SIZE = 16 * 1024 * 1024; // 16MB
 const ALLOWED_EXT = new Set(['pdf', 'docx', 'pptx']);
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ;
+const GEMINI_MODEL = process.env.GEMINI_MODEL ;
 
 const storage = multer.memoryStorage();
 
