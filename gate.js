@@ -20,6 +20,8 @@ export function createGate(scene, player, options) {
     width = 4,
     height = 4,
     depth = 0.9,
+    panelAlpha = 0.9,
+    hideVisuals = false,
     onEnter,
     metadata = {},
   } = options;
@@ -40,7 +42,7 @@ export function createGate(scene, player, options) {
   const panelMat = new BABYLON.StandardMaterial('gate-panel-mat', scene);
   panelMat.diffuseColor = color;
   panelMat.emissiveColor = color.scale(0.4);
-  panelMat.alpha = 0.9;
+  panelMat.alpha = panelAlpha;
 
   const panel = BABYLON.MeshBuilder.CreateBox(
     'gate-panel',
@@ -84,6 +86,14 @@ export function createGate(scene, player, options) {
   cap.material = capMat;
   cap.parent = root;
   cap.position = new BABYLON.Vector3(0, postHeight + 0.1, 0);
+
+  if (hideVisuals) {
+    panel.isVisible = false;
+    leftPost.isVisible = false;
+    rightPost.isVisible = false;
+    cap.isVisible = false;
+    labelPlane.isVisible = false;
+  }
 
   // Invisible collider box to reliably detect intersections
   const collider = BABYLON.MeshBuilder.CreateBox(

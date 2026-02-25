@@ -2,7 +2,7 @@ import { createGate, createEndGate } from './gate.js';
 
 const CONFIG = {
   googleForm: 'https://docs.google.com/forms/d/e/1FAIpQLSeK2rPrrUUo1YnIfrDUVive9NZjUZ-8cxWxOsWiEfUyKhqlug/viewform?usp=publish-editor',
-  runSpeedMs: 0.012, // forward speed per ms
+  runSpeedMs: 0.0068, // forward speed per ms (~20% slower than before to add reaction time)
   strafeSpeedMs: 0.02, // left/right speed per ms
   gateSpacing: 22,
   trackWidth: 16,
@@ -243,7 +243,17 @@ async function generateQuestions() {
     fd.append('file', file);
 
     const res = await fetch('/api/generate-questions', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let message = `Server error (${res.status})`;
+      try {
+        const errBody = await res.json();
+        if (errBody?.error) message = errBody.error;
+      } catch (parseErr) {
+        console.warn('Failed to parse error response', parseErr);
+      }
+      setStatus(message, false, true);
+      return;
+    }
     const data = await res.json();
     const raw = data?.result?.questions || data?.questions || [];
     generatedQuestions = normalizeTwoOptions(raw);
@@ -485,25 +495,50 @@ function resetPlayerPosition() {
 function buildCourse() {
   let zPos = CONFIG.startZ + 18;
   const laneWidth = CONFIG.trackWidth;
-  const spacing = laneWidth / 2; // centers split the track into two equal lanes
-  const startX = -laneWidth / 4; // left center
+  const baseSpacing = laneWidth / 3;
+  const gateOffset = baseSpacing * 0.6; // bring A/B closer to center
+  const gateWidth = baseSpacing * 0.8;
+  const centerWidth = laneWidth * 1.2; // stretch neutral collider to cover any gaps as hard out-of-bounds
+  const startX = -gateOffset; // left center
 
   selectedQuestions.forEach((q, qIdx) => {
-    const opts = q.options.slice(0, 2);
     const pair = [];
-    opts.forEach((opt, optIdx) => {
-      const position = new BABYLON.Vector3(startX + spacing * optIdx, 0, zPos);
-      const gate = createGate(scene, player, {
-        label: optIdx === 0 ? 'A' : 'B',
-        position,
-        color: optIdx === 0 ? new BABYLON.Color3(0.96, 0.32, 0.32) : new BABYLON.Color3(0.32, 0.58, 0.96),
-        width: CONFIG.trackWidth / 2,
-        onEnter: () => handleGateHit(qIdx, optIdx, gate),
-        metadata: { questionId: q.id, optionIndex: optIdx },
-      });
-      gateMeshes.push(gate);
-      pair.push(gate);
+
+    const leftGate = createGate(scene, player, {
+      label: 'A',
+      position: new BABYLON.Vector3(startX, 0, zPos),
+      color: new BABYLON.Color3(0.85, 0.36, 0.2), // burnt sienna for option A (avoids blue-yellow axis)
+      width: gateWidth,
+      onEnter: () => handleGateHit(qIdx, 0, leftGate),
+      metadata: { questionId: q.id, optionIndex: 0, type: 'option' },
     });
+    gateMeshes.push(leftGate);
+    pair.push(leftGate);
+
+    const midGate = createGate(scene, player, {
+      label: '[ ]',
+      position: new BABYLON.Vector3(0, 0, zPos),
+      color: new BABYLON.Color3(0.55, 0.55, 0.6), // neutral center check lane
+      width: centerWidth,
+      panelAlpha: 0.25,
+      hideVisuals: true, // keep collider only so the lane is invisible but still detectable
+      onEnter: () => handleGateHit(qIdx, -1, midGate),
+      metadata: { type: 'neutral', questionId: q.id, optionIndex: -1 },
+    });
+    gateMeshes.push(midGate);
+    pair.push(midGate);
+
+    const rightGate = createGate(scene, player, {
+      label: 'B',
+      position: new BABYLON.Vector3(gateOffset, 0, zPos),
+      color: new BABYLON.Color3(0.55, 0.12, 0.55), // plum for option B (avoids blue-yellow axis)
+      width: gateWidth,
+      onEnter: () => handleGateHit(qIdx, 1, rightGate),
+      metadata: { questionId: q.id, optionIndex: 1, type: 'option' },
+    });
+    gateMeshes.push(rightGate);
+    pair.push(rightGate);
+
     gatePairs.push(pair);
     zPos += CONFIG.gateSpacing;
   });
@@ -523,7 +558,8 @@ function handleGateHit(questionIdx, optionIdx, gate) {
     panelMat.emissiveColor = correct ? new BABYLON.Color3(0.1, 0.6, 0.28) : new BABYLON.Color3(0.7, 0.2, 0.2);
   }
 
-  showHitFeedback(correct, question.options[optionIdx]);
+  const hitLabel = optionIdx >= 0 ? question.options[optionIdx] : 'No answer';
+  showHitFeedback(correct, hitLabel);
 
   currentQuestionIdx += 1;
   if (currentQuestionIdx >= selectedQuestions.length) {
@@ -547,7 +583,8 @@ function checkGateCollision() {
     collider.computeWorldMatrix(true);
     if (player.intersectsMesh(collider, false)) {
       gate.metadata.hit = true;
-      handleGateHit(currentQuestionIdx, optIdx, gate);
+      const opt = typeof gate.metadata?.optionIndex === 'number' ? gate.metadata.optionIndex : optIdx;
+      handleGateHit(currentQuestionIdx, opt, gate);
       return;
     }
   }
