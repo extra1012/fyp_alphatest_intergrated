@@ -21,6 +21,8 @@ let selectedQuestions = [];
 let currentQuestionIdx = 0;
 let gameState = 'setup'; // setup | running | finished
 let moveDir = 0;
+let dragActive = false;
+let dragTargetX = 0;
 let results = { correct: 0, total: 0, points: 0 };
 let trackSegments = [];
 
@@ -89,9 +91,15 @@ function bindUI() {
   });
 
   window.addEventListener('pointerdown', (e) => {
-    moveDir = e.clientX < window.innerWidth / 2 ? -1 : 1;
+    dragActive = true;
+    updateDragTarget(e.clientX);
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!dragActive) return;
+    updateDragTarget(e.clientX);
   });
   window.addEventListener('pointerup', () => {
+    dragActive = false;
     moveDir = 0;
   });
 
@@ -438,6 +446,12 @@ function setRunStatus(text) {
   ui.runStatus.textContent = text;
 }
 
+function updateDragTarget(clientX) {
+  const limit = CONFIG.trackWidth / 2 - 1.2;
+  const normalized = (clientX / window.innerWidth) * 2 - 1; // -1 left, 1 right
+  dragTargetX = Math.min(Math.max(normalized * limit, -limit), limit);
+}
+
 function stripOptionPrefix(text) {
   const value = (text || '').trim();
   return value.replace(/^[AaBb]\s*:\s*/, '').trim() || value;
@@ -596,7 +610,14 @@ function showResult() {
 
 function movePlayer(deltaMs) {
   player.position.z += CONFIG.runSpeedMs * deltaMs;
-  player.position.x += moveDir * CONFIG.strafeSpeedMs * deltaMs;
+  if (dragActive) {
+    // Smoothly steer toward the drag target when user is dragging
+    const lerp = 0.18;
+    const dx = dragTargetX - player.position.x;
+    player.position.x += dx * lerp;
+  } else {
+    player.position.x += moveDir * CONFIG.strafeSpeedMs * deltaMs;
+  }
   const limit = CONFIG.trackWidth / 2 - 1.2;
   player.position.x = Math.min(Math.max(player.position.x, -limit), limit);
 }
