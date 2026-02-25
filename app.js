@@ -1,7 +1,7 @@
 import { createGate, createEndGate } from './gate.js';
 
 const CONFIG = {
-  googleForm: 'https://forms.gle/your-google-form-link',
+  googleForm: 'https://docs.google.com/forms/d/e/1FAIpQLSeK2rPrrUUo1YnIfrDUVive9NZjUZ-8cxWxOsWiEfUyKhqlug/viewform?usp=publish-editor',
   runSpeedMs: 0.012, // forward speed per ms
   strafeSpeedMs: 0.02, // left/right speed per ms
   gateSpacing: 22,
