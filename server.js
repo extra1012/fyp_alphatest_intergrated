@@ -277,7 +277,12 @@ app.get('/api/questions/latest', (_req, res) => {
   res.json({ questions: normalized });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+// Only start the server directly when running this file, not when imported (e.g., Netlify Functions)
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
