@@ -36,7 +36,15 @@ function normalizeTwoOptionQuestion(q, idx = 0) {
     const prefix = i === 0 ? 'A:' : 'B:';
     return opt?.trim().startsWith(prefix) ? opt : `${prefix} ${opt || ''}`.trim();
   });
-  const answerIndex = q.answerIndex === 1 ? 1 : 0;
+  const rawAns = q.answerIndex;
+  let answerIndex = 0;
+  if (typeof rawAns === 'string') {
+    const v = rawAns.trim().toLowerCase();
+    if (v === '1' || v === 'b' || v === 'option b' || v === 'option2' || v === 'option 2') answerIndex = 1;
+  } else {
+    const ansNum = Number(rawAns);
+    if (ansNum === 1) answerIndex = 1;
+  }
   return {
     id: q.id || `q-${idx + 1}`,
     question_number: q.question_number || idx + 1,
@@ -99,7 +107,7 @@ async function generateQuestionsWithGemini(prompt, count = 10, docContext = null
     'Each question must have exactly 2 concise options (plain text, no A:/B: prefixes) and one correct answer.',
     'Return strict JSON only, no prose:',
     '{"questions":[{"id":"q-1","question":"...","options":["option text 1","option text 2"],"answerIndex":0}]}',
-    'answerIndex must be 0 for the first option or 1 for the second; the game will label gates as A/B.',
+    'answerIndex must be 0 for the first option or 1 for the second; vary which option is correct and set answerIndex to the correct option (do not always return 0).',
     `Preset prompt:
 ${prompt || 'document only'}.`,
     docContext

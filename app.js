@@ -314,7 +314,14 @@ function normalizeTwoOptions(list) {
       const prefix = i === 0 ? 'A:' : 'B:';
       return opt?.trim().startsWith(prefix) ? opt : `${prefix} ${opt || 'Option'}`.trim();
     });
-    const safeAnswer = Number.isFinite(Number(q.answerIndex)) ? Number(q.answerIndex) : 0;
+    let safeAnswer = 0;
+    const rawAns = q.answerIndex;
+    if (typeof rawAns === 'string') {
+      const v = rawAns.trim().toLowerCase();
+      if (v === '1' || v === 'b' || v === 'option b' || v === 'option2' || v === 'option 2') safeAnswer = 1;
+    } else if (Number.isFinite(Number(rawAns))) {
+      safeAnswer = Number(rawAns) === 1 ? 1 : 0;
+    }
     return {
       id: q.id || `q-${idx + 1}`,
       question: q.question || `Question ${idx + 1}`,
@@ -322,27 +329,6 @@ function normalizeTwoOptions(list) {
       answerIndex: Math.min(Math.max(0, safeAnswer), 1),
     };
   });
-}
-
-function shuffleQuestionOptions(question, rng = Math.random) {
-  const opts = Array.isArray(question.options) ? question.options.slice(0, 2) : [];
-  while (opts.length < 2) opts.push('Option');
-  const answerIdx = Math.min(Math.max(0, Number(question.answerIndex) || 0), 1);
-
-  // Fisher–Yates with injectable RNG for testability
-  const pairs = opts.map((opt, idx) => ({ opt, idx }));
-  for (let i = pairs.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
-  }
-
-  const shuffledOpts = pairs.map((p) => p.opt);
-  const newAnswerIndex = pairs.findIndex((p) => p.idx === answerIdx);
-  return {
-    ...question,
-    options: shuffledOpts,
-    answerIndex: newAnswerIndex >= 0 ? newAnswerIndex : 0,
-  };
 }
 
 function shuffle(arr) {
@@ -452,8 +438,7 @@ function startGameFromSelection() {
     setStatus('Select at least one question to start', false, true);
     return;
   }
-  const shuffledPerQuestion = chosen.map((q) => shuffleQuestionOptions(q));
-  selectedQuestions = shuffle(shuffledPerQuestion.slice());
+  selectedQuestions = shuffle(chosen.slice());
   startGame(false);
 }
 
@@ -575,19 +560,6 @@ function buildCourse() {
     gateMeshes.push(leftGate);
     pair.push(leftGate);
 
-    const midGate = createGate(scene, player, {
-      label: '[ ]',
-      position: new BABYLON.Vector3(0, 0, zPos),
-      color: new BABYLON.Color3(0.55, 0.55, 0.6), // neutral center check lane
-      width: centerWidth,
-      panelAlpha: 0.25,
-      hideVisuals: true, // keep collider only so the lane is invisible but still detectable
-      onEnter: () => handleGateHit(qIdx, -1, midGate),
-      metadata: { type: 'neutral', questionId: q.id, optionIndex: -1 },
-    });
-    gateMeshes.push(midGate);
-    pair.push(midGate);
-
     const rightGate = createGate(scene, player, {
       label: 'B',
       position: new BABYLON.Vector3(gateOffset, 0, zPos),
@@ -599,6 +571,20 @@ function buildCourse() {
     });
     gateMeshes.push(rightGate);
     pair.push(rightGate);
+
+    const neutralZ = zPos + 1.2; // place behind the gate so bypasses still count as wrong
+    const midGate = createGate(scene, player, {
+      label: '[ ]',
+      position: new BABYLON.Vector3(0, 0, neutralZ),
+      color: new BABYLON.Color3(0.55, 0.55, 0.6), // neutral center check lane
+      width: centerWidth,
+      panelAlpha: 0.15,
+      hideVisuals: true, // collider only; invisible
+      onEnter: () => handleGateHit(qIdx, -1, midGate),
+      metadata: { type: 'neutral', questionId: q.id, optionIndex: -1 },
+    });
+    gateMeshes.push(midGate);
+    pair.push(midGate);
 
     gatePairs.push(pair);
 
