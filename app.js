@@ -324,11 +324,20 @@ function normalizeTwoOptions(list) {
   });
 }
 
-function shuffleQuestionOptions(question) {
-  const pairs = (question.options || []).map((opt, idx) => ({ opt, idx }));
-  shuffle(pairs);
+function shuffleQuestionOptions(question, rng = Math.random) {
+  const opts = Array.isArray(question.options) ? question.options.slice(0, 2) : [];
+  while (opts.length < 2) opts.push('Option');
+  const answerIdx = Math.min(Math.max(0, Number(question.answerIndex) || 0), 1);
+
+  // Fisher–Yates with injectable RNG for testability
+  const pairs = opts.map((opt, idx) => ({ opt, idx }));
+  for (let i = pairs.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
+  }
+
   const shuffledOpts = pairs.map((p) => p.opt);
-  const newAnswerIndex = pairs.findIndex((p) => p.idx === question.answerIndex);
+  const newAnswerIndex = pairs.findIndex((p) => p.idx === answerIdx);
   return {
     ...question,
     options: shuffledOpts,
