@@ -324,6 +324,18 @@ function normalizeTwoOptions(list) {
   });
 }
 
+function shuffleQuestionOptions(question) {
+  const pairs = (question.options || []).map((opt, idx) => ({ opt, idx }));
+  shuffle(pairs);
+  const shuffledOpts = pairs.map((p) => p.opt);
+  const newAnswerIndex = pairs.findIndex((p) => p.idx === question.answerIndex);
+  return {
+    ...question,
+    options: shuffledOpts,
+    answerIndex: newAnswerIndex >= 0 ? newAnswerIndex : 0,
+  };
+}
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -431,7 +443,8 @@ function startGameFromSelection() {
     setStatus('Select at least one question to start', false, true);
     return;
   }
-  selectedQuestions = shuffle(chosen.slice());
+  const shuffledPerQuestion = chosen.map((q) => shuffleQuestionOptions(q));
+  selectedQuestions = shuffle(shuffledPerQuestion.slice());
   startGame(false);
 }
 
