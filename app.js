@@ -277,10 +277,16 @@ async function generateQuestions() {
     if (!res.ok) {
       let message = `Server error (${res.status})`;
       try {
-        const errBody = await res.json();
-        if (errBody?.error) message = errBody.error;
-      } catch (parseErr) {
-        console.warn('Failed to parse error response', parseErr);
+        const text = await res.text();
+        console.warn('Question API error body:', text); // surfacing raw response for devtools
+        try {
+          const errBody = JSON.parse(text);
+          if (errBody?.error) message = errBody.error;
+        } catch (parseErr) {
+          console.warn('Failed to parse error response as JSON', parseErr);
+        }
+      } catch (readErr) {
+        console.warn('Failed to read error response', readErr);
       }
       setStatus(message, false, true);
       return;
