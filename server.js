@@ -94,7 +94,7 @@ async function generateQuestionsWithGemini(prompt, count = 10, docContext = null
   }
 
   const systemPrompt = [
-    `Summarize the provided document, find key points, and create ${count} questions (no duplicates).`,
+    `Summarize the provided document, find key points, and create ${count} questions within 18 words (no duplicates question).`,
     `If there are more than ${count} key points, randomly pick ${count}; otherwise keep all points but still output ${count} questions (repeat key ideas if needed without duplication).`,
     'Each question must have exactly 2 concise options (plain text, no A:/B: prefixes) and one correct answer.',
     'Return strict JSON only, no prose:',

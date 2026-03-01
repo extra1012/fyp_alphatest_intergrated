@@ -226,6 +226,37 @@ function createScene(engine, canvas) {
   return scene;
 }
 
+function createRoadMarker(text, position, size = 3, tint = new BABYLON.Color3(1, 1, 1), offsetX = 0, flipFacing = true, mirrorX = false) {
+  const texSize = 256;
+  const zId = position?.z ?? 0;
+  const texture = new BABYLON.DynamicTexture(`road-marker-${text}-${zId}`, { width: texSize, height: texSize }, scene, false);
+  texture.hasAlpha = true;
+  const fontSize = Math.floor(texSize * 0.5);
+  texture.drawText(text, texSize / 2, texSize / 2 + fontSize * 0.15, `bold ${fontSize}px Segoe UI`, '#f8fafc', 'transparent', true, true);
+
+  const mat = new BABYLON.StandardMaterial(`road-marker-mat-${text}-${zId}`, scene);
+  mat.diffuseTexture = texture;
+  mat.emissiveColor = tint.scale(0.85);
+  mat.specularColor = BABYLON.Color3.Black();
+  mat.backFaceCulling = false;
+
+  const basePos = position || {};
+  const pos = basePos.clone ? basePos.clone() : new BABYLON.Vector3(basePos.x || 0, basePos.y || 0, basePos.z || 0);
+  pos.y = Math.max(pos.y, 0.02);
+
+  const plane = BABYLON.MeshBuilder.CreatePlane(`road-marker-${text}-${zId}`, { size }, scene);
+  plane.material = mat;
+  plane.position = pos;
+  plane.position.x += offsetX; // nudge along x to align under gate panel
+  const yaw = flipFacing ? Math.PI : 0;
+  plane.rotation = new BABYLON.Vector3(-Math.PI / 2, yaw, 0); // face player along approach direction
+  if (mirrorX) {
+    plane.scaling = new BABYLON.Vector3(-1, 1, 1); // mirror text horizontally
+  }
+  plane.isPickable = false;
+  return plane;
+}
+
 async function generateQuestions() {
   try {
     ui.generateBtn.disabled = true;
@@ -509,6 +540,7 @@ function buildCourse() {
       position: new BABYLON.Vector3(startX, 0, zPos),
       color: new BABYLON.Color3(0.85, 0.36, 0.2), // burnt sienna for option A (avoids blue-yellow axis)
       width: gateWidth,
+      showLabel: false,
       onEnter: () => handleGateHit(qIdx, 0, leftGate),
       metadata: { questionId: q.id, optionIndex: 0, type: 'option' },
     });
@@ -533,6 +565,7 @@ function buildCourse() {
       position: new BABYLON.Vector3(gateOffset, 0, zPos),
       color: new BABYLON.Color3(0.55, 0.12, 0.55), // plum for option B (avoids blue-yellow axis)
       width: gateWidth,
+      showLabel: false,
       onEnter: () => handleGateHit(qIdx, 1, rightGate),
       metadata: { questionId: q.id, optionIndex: 1, type: 'option' },
     });
@@ -540,6 +573,15 @@ function buildCourse() {
     pair.push(rightGate);
 
     gatePairs.push(pair);
+
+    const markerZ = zPos - 2.5;
+    const markerSize = gateWidth * 1.2;
+    const markerOffsetA = markerSize * 0.08; // nudge A slightly right
+    const markerOffsetB = -markerSize * 0.12; // nudge B further left
+    const markerA = createRoadMarker('A', new BABYLON.Vector3(startX, 0.02, markerZ), markerSize, new BABYLON.Color3(0.85, 0.36, 0.2), markerOffsetA, true, false);
+    const markerB = createRoadMarker('B', new BABYLON.Vector3(gateOffset, 0.02, markerZ), markerSize, new BABYLON.Color3(0.55, 0.12, 0.55), markerOffsetB, true, true);
+    trackSegments.push(markerA, markerB);
+
     zPos += CONFIG.gateSpacing;
   });
 }

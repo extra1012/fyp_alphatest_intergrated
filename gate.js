@@ -14,7 +14,7 @@ function drawLabelTexture(scene, text, width = 256, height = 128) {
 
 export function createGate(scene, player, options) {
   const {
-    label,
+    label = '',
     position,
     color = new BABYLON.Color3(0.29, 0.49, 0.92),
     width = 4,
@@ -22,6 +22,7 @@ export function createGate(scene, player, options) {
     depth = 0.9,
     panelAlpha = 0.9,
     hideVisuals = false,
+    showLabel = true,
     onEnter,
     metadata = {},
   } = options;
@@ -67,16 +68,19 @@ export function createGate(scene, player, options) {
   rightPost.position.x = postOffset;
   rightPost.parent = root;
 
-  const labelTexture = drawLabelTexture(scene, label, 256, 128);
-  const labelPlane = BABYLON.MeshBuilder.CreatePlane('gate-label-plane', { size: panelHeight * 0.9, width: panelWidth * 0.9 }, scene);
-  const labelMat = new BABYLON.StandardMaterial('gate-label-mat', scene);
-  labelMat.diffuseTexture = labelTexture;
-  labelMat.diffuseTexture.hasAlpha = true;
-  labelMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
-  labelMat.backFaceCulling = false;
-  labelPlane.material = labelMat;
-  labelPlane.parent = root;
-  labelPlane.position = new BABYLON.Vector3(0, postHeight / 2, depth / 1.6);
+  let labelPlane;
+  if (showLabel && label) {
+    const labelTexture = drawLabelTexture(scene, label, 256, 128);
+    labelPlane = BABYLON.MeshBuilder.CreatePlane('gate-label-plane', { size: panelHeight * 0.9, width: panelWidth * 0.9 }, scene);
+    const labelMat = new BABYLON.StandardMaterial('gate-label-mat', scene);
+    labelMat.diffuseTexture = labelTexture;
+    labelMat.diffuseTexture.hasAlpha = true;
+    labelMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    labelMat.backFaceCulling = false;
+    labelPlane.material = labelMat;
+    labelPlane.parent = root;
+    labelPlane.position = new BABYLON.Vector3(0, postHeight / 2, depth / 1.6);
+  }
 
   // Cap topper to mimic mobile-runner gates
   const cap = BABYLON.MeshBuilder.CreateBox('gate-cap', { width: panelWidth, height: 0.35, depth: depth * 1.2 }, scene);
@@ -92,7 +96,7 @@ export function createGate(scene, player, options) {
     leftPost.isVisible = false;
     rightPost.isVisible = false;
     cap.isVisible = false;
-    labelPlane.isVisible = false;
+    if (labelPlane) labelPlane.isVisible = false;
   }
 
   // Invisible collider box to reliably detect intersections
