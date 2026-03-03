@@ -48,7 +48,13 @@ const ui = {
   surveyBtn: document.getElementById('surveyBtn'),
   hitFlash: document.getElementById('hitFlash'),
   hitText: document.getElementById('hitText'),
+  progressBar: document.getElementById('progressBar'),
+  progressFill: document.getElementById('progressFill'),
+  progressLabel: document.getElementById('progressLabel'),
 };
+
+let progressTimer = null;
+let progressValue = 0;
 
 window.addEventListener('DOMContentLoaded', () => {
   const canvas = document.getElementById('renderCanvas');
@@ -257,6 +263,38 @@ function createRoadMarker(text, position, size = 3, tint = new BABYLON.Color3(1,
   return plane;
 }
 
+function startProgress(label = 'Preparing...') {
+  if (!ui.progressBar || !ui.progressFill || !ui.progressLabel) return;
+  clearInterval(progressTimer);
+  progressValue = 8;
+  ui.progressBar.classList.remove('hidden');
+  ui.progressFill.style.width = `${progressValue}%`;
+  ui.progressLabel.textContent = label;
+  progressTimer = setInterval(() => {
+    progressValue = Math.min(98, progressValue + (100 - progressValue) * 0.08 + 1);
+    ui.progressFill.style.width = `${progressValue}%`;
+  }, 220);
+}
+
+function updateProgress(label, value) {
+  if (!ui.progressBar || !ui.progressFill || !ui.progressLabel) return;
+  if (label) ui.progressLabel.textContent = label;
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    progressValue = Math.max(progressValue, Math.min(98, value));
+    ui.progressFill.style.width = `${progressValue}%`;
+  }
+}
+
+function finishProgress() {
+  if (!ui.progressBar || !ui.progressFill) return;
+  clearInterval(progressTimer);
+  ui.progressFill.style.width = '100%';
+  setTimeout(() => {
+    ui.progressBar.classList.add('hidden');
+    ui.progressFill.style.width = '0%';
+  }, 360);
+}
+
 async function generateQuestions() {
   try {
     ui.generateBtn.disabled = true;
@@ -268,12 +306,15 @@ async function generateQuestions() {
       return;
     }
 
+    startProgress('Uploading file...');
+
     const fd = new FormData();
     fd.append('prompt', '');
     fd.append('count', Number(ui.countInput.value) || 8);
     fd.append('file', file);
 
     const res = await fetch('/api/generate-questions', { method: 'POST', body: fd });
+    updateProgress('Generating questions...', 68);
     if (!res.ok) {
       let message = `Server error (${res.status})`;
       try {
@@ -292,16 +333,19 @@ async function generateQuestions() {
       return;
     }
     const data = await res.json();
+    updateProgress('Finalizing...', 90);
     const raw = data?.result?.questions || data?.questions || [];
     generatedQuestions = normalizeTwoOptions(raw);
     renderQuestionList(generatedQuestions);
     setStatus('Generated. Pick the questions to play.', true);
   } catch (err) {
     console.warn('Generation failed, using fallback', err);
+    updateProgress('Using fallback questions...', 72);
     generatedQuestions = fallbackQuestions();
     renderQuestionList(generatedQuestions);
     setStatus('Using fallback questions', false, true);
   } finally {
+    finishProgress();
     ui.generateBtn.disabled = false;
   }
 }

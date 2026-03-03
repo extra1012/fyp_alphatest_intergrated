@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const multer = require('multer');
+const Busboy = require('busboy');
 const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
@@ -13,19 +13,76 @@ app.use(express.static(__dirname));
 const OUTPUT_FOLDER = path.join(__dirname, 'generated');
 const MAX_SIZE = 16 * 1024 * 1024; // 16MB
 const ALLOWED_EXT = new Set(['pdf', 'docx', 'pptx']);
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ;
-const GEMINI_MODEL = process.env.GEMINI_MODEL ;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL;
 
-const storage = multer.memoryStorage();
+function parseMultipartRequest(req) {
+  return new Promise((resolve, reject) => {
+    const busboy = Busboy({ headers: req.headers, limits: { fileSize: MAX_SIZE, files: 1 } });
+    const fields = {};
+    let fileMeta = null;
+    let fileBuffer = Buffer.alloc(0);
+    let rejected = false;
 
-const upload = multer({
-  storage,
-  limits: { fileSize: MAX_SIZE },
-  fileFilter: (_req, file, cb) => {
-    const ext = (file.originalname.split('.').pop() || '').toLowerCase();
-    cb(null, ALLOWED_EXT.has(ext));
-  },
-});
+    busboy.on('file', (fieldname, file, info) => {
+      if (fileMeta) {
+        file.resume();
+        return;
+      }
+      const { filename, mimeType } = info;
+      const ext = (filename.split('.').pop() || '').toLowerCase();
+      if (!ALLOWED_EXT.has(ext)) {
+        rejected = true;
+        file.resume();
+        busboy.emit('error', new Error('Unsupported file type')); // surface to caller
+        return;
+      }
+
+      file.on('data', (chunk) => {
+        if (rejected) return;
+        const nextSize = fileBuffer.length + chunk.length;
+        if (nextSize > MAX_SIZE) {
+          rejected = true;
+          file.resume();
+          busboy.emit('error', new Error('File too large'));
+          return;
+        }
+        fileBuffer = Buffer.concat([fileBuffer, chunk]);
+      });
+
+      file.on('end', () => {
+        if (rejected) return;
+        fileMeta = {
+          fieldname,
+          originalname: filename,
+          mimetype: mimeType,
+          size: fileBuffer.length,
+          buffer: fileBuffer,
+        };
+      });
+    });
+
+    busboy.on('field', (name, val) => {
+      fields[name] = val;
+    });
+
+    busboy.on('error', (err) => {
+      rejected = true;
+      reject(err);
+    });
+
+    busboy.on('finish', () => {
+      if (rejected) return;
+      if (!fileMeta) {
+        reject(new Error('No file uploaded'));
+        return;
+      }
+      resolve({ fields, file: fileMeta });
+    });
+
+    req.pipe(busboy);
+  });
+}
 
 function normalizeTwoOptionQuestion(q, idx = 0) {
   const opts = Array.isArray(q.options) ? q.options.slice(0, 2) : [];
@@ -183,45 +240,47 @@ app.get('/generator', (_req, res) => {
   res.sendFile(path.join(__dirname, 'generator.html'));
 });
 
-app.post('/generate-game', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const questionNumbers = Number(req.body.question_numbers || 10);
+app.post('/generate-game', async (req, res) => {
   try {
-    const result = generateQuestionsFromFile(req.file.buffer, questionNumbers);
-    res.json({ message: `Generated ${result.total_question} questions`, result, filename: req.file.filename });
+    const { file, fields } = await parseMultipartRequest(req);
+    const questionNumbers = Number(fields.question_numbers || 10);
+    const result = generateQuestionsFromFile(file.buffer, questionNumbers);
+    res.json({ message: `Generated ${result.total_question} questions`, result, filename: file.originalname });
   } catch (err) {
-    res.status(500).json({ error: `Processing failed: ${err.message}` });
+    const msg = err.message || '';
+    const status = msg.toLowerCase().includes('file') || msg.toLowerCase().includes('upload') ? 400 : 500;
+    res.status(status).json({ error: msg || 'Upload failed' });
   }
 });
 
-app.post('/api/generate-questions', upload.single('file'), async (req, res) => {
-  const { prompt = '', count = 10 } = req.body || {};
-  const file = req.file;
+app.post('/api/generate-questions', async (req, res) => {
+  let file;
+  let fields;
+  try {
+    const parsed = await parseMultipartRequest(req);
+    file = parsed.file;
+    fields = parsed.fields;
+  } catch (err) {
+    const status = err.message.toLowerCase().includes('file') ? 400 : 500;
+    return res.status(status).json({ error: err.message || 'Upload failed' });
+  }
+
+  const prompt = fields?.prompt || '';
+  const count = Number(fields?.count || 10) || 10;
   if (!file) {
     return res.status(400).json({ error: 'Upload a pdf/docx/pptx file to generate questions' });
   }
-  /*console.log('generate-questions input:', {
-    prompt,
-    count,
-    filename: file.originalname,
-    mimetype: file.mimetype,
-    size: file.size,
-  });
-  // test line 
-  */
-  let docContext = null;
 
-  if (file) {
-    try {
-      const base64 = file.buffer.toString('base64').slice(0, 4000); // truncate to keep payload small
-      docContext = {
-        filename: file.originalname,
-        mimetype: file.mimetype,
-        base64,
-      };
-    } catch (err) {
-      console.warn('Failed to read uploaded file for Gemini prompt:', err);
-    }
+  let docContext = null;
+  try {
+    const base64 = file.buffer.toString('base64').slice(0, 4000); // truncate to keep payload small
+    docContext = {
+      filename: file.originalname,
+      mimetype: file.mimetype,
+      base64,
+    };
+  } catch (err) {
+    console.warn('Failed to read uploaded file for Gemini prompt:', err);
   }
 
   try {
@@ -229,21 +288,21 @@ app.post('/api/generate-questions', upload.single('file'), async (req, res) => {
       throw new Error('Gemini API key required');
     }
 
-    const result = await generateQuestionsWithGemini(prompt, Number(count) || 10, docContext);
+    const result = await generateQuestionsWithGemini(prompt, count, docContext);
     res.json({
       message: `Generated ${result.total_question} questions`,
       result,
       note: 'live-gemini',
-      usedFile: file ? file.originalname : null,
+      usedFile: file.originalname,
     });
   } catch (err) {
     console.error('Gemini generation failed, serving fallback', err);
-    const fallback = generateQuestionsFromFile(file.buffer, Number(count) || 10);
+    const fallback = generateQuestionsFromFile(file.buffer, count);
     res.status(200).json({
       message: `Generated ${fallback.total_question} fallback questions`,
       result: fallback,
       note: 'fallback-local',
-      usedFile: file ? file.originalname : null,
+      usedFile: file.originalname,
       warning: `Gemini generation failed: ${err.message}`,
     });
   }
@@ -285,6 +344,17 @@ app.get('/api/questions/latest', (_req, res) => {
   res.json({ questions: normalized });
 });
 
+let firebaseHandler = null;
+if (process.env.FIREBASE_CONFIG) {
+  try {
+    // Optional Firebase Functions export so the same Express app can run on Firebase Hosting rewrites.
+    const functions = require('firebase-functions');
+    firebaseHandler = functions.https.onRequest(app);
+  } catch (err) {
+    console.warn('firebase-functions not available; skipping Firebase export');
+  }
+}
+
 // Only start the server directly when running this file, not when imported (e.g., Netlify Functions)
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
@@ -294,3 +364,7 @@ if (require.main === module) {
 }
 
 module.exports = app;
+if (firebaseHandler) {
+  module.exports.firebase = firebaseHandler;
+  module.exports.api = firebaseHandler;
+}
