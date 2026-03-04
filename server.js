@@ -4,6 +4,8 @@ const Busboy = require('busboy');
 const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { initializeApp } = require('firebase/app');
+const { getStorage, ref, uploadBytes } = require('firebase/storage');
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -15,6 +17,41 @@ const MAX_SIZE = 16 * 1024 * 1024; // 16MB
 const ALLOWED_EXT = new Set(['pdf', 'docx', 'pptx']);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL;
+const FIREBASE_CONFIG = {
+  apiKey: process.env.FIREBASE_API_KEY || 'your-api-key',
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN || 'your-project.firebaseapp.com',
+  projectId: process.env.FIREBASE_PROJECT_ID || 'your-project-id',
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'your-project.appspot.com',
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || 'your-messaging-sender-id',
+  appId: process.env.FIREBASE_APP_ID || 'your-app-id',
+};
+
+let firebaseStorage = null;
+
+function firebaseReady() {
+  return Boolean(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.appId && FIREBASE_CONFIG.storageBucket && !FIREBASE_CONFIG.apiKey.startsWith('your-'));
+}
+
+function ensureStorage() {
+  if (firebaseStorage) return firebaseStorage;
+  if (!firebaseReady()) return null;
+  const fbApp = initializeApp(FIREBASE_CONFIG);
+  firebaseStorage = getStorage(fbApp);
+  return firebaseStorage;
+}
+
+function sanitizeFilename(name) {
+  return (name || 'upload').replace(/[^a-zA-Z0-9_.-]/g, '_');
+}
+
+async function uploadToFirebase(file) {
+  const storage = ensureStorage();
+  if (!storage) return null;
+  const safeName = sanitizeFilename(file.originalname || 'upload.bin');
+  const storageRef = ref(storage, `uploads/${Date.now()}_${safeName}`);
+  await uploadBytes(storageRef, file.buffer, { contentType: file.mimetype || 'application/octet-stream' });
+  return { path: storageRef.fullPath, bucket: storageRef.bucket || FIREBASE_CONFIG.storageBucket, name: storageRef.name };
+}
 
 function parseMultipartRequest(req) {
   return new Promise((resolve, reject) => {
@@ -244,8 +281,15 @@ app.post('/generate-game', async (req, res) => {
   try {
     const { file, fields } = await parseMultipartRequest(req);
     const questionNumbers = Number(fields.question_numbers || 10);
+    let uploadMeta = null;
+    try {
+      uploadMeta = await uploadToFirebase(file);
+    } catch (err) {
+      console.warn('Firebase upload failed, continuing without cloud copy', err);
+    }
+
     const result = generateQuestionsFromFile(file.buffer, questionNumbers);
-    res.json({ message: `Generated ${result.total_question} questions`, result, filename: file.originalname });
+    res.json({ message: `Generated ${result.total_question} questions`, result, filename: file.originalname, uploaded: uploadMeta });
   } catch (err) {
     const msg = err.message || '';
     const status = msg.toLowerCase().includes('file') || msg.toLowerCase().includes('upload') ? 400 : 500;
@@ -271,6 +315,13 @@ app.post('/api/generate-questions', async (req, res) => {
     return res.status(400).json({ error: 'Upload a pdf/docx/pptx file to generate questions' });
   }
 
+  let uploadMeta = null;
+  try {
+    uploadMeta = await uploadToFirebase(file);
+  } catch (err) {
+    console.warn('Firebase upload failed, continuing without cloud copy', err);
+  }
+
   let docContext = null;
   try {
     const base64 = file.buffer.toString('base64').slice(0, 4000); // truncate to keep payload small
@@ -294,6 +345,7 @@ app.post('/api/generate-questions', async (req, res) => {
       result,
       note: 'live-gemini',
       usedFile: file.originalname,
+      uploaded: uploadMeta,
     });
   } catch (err) {
     console.error('Gemini generation failed, serving fallback', err);
@@ -303,6 +355,7 @@ app.post('/api/generate-questions', async (req, res) => {
       result: fallback,
       note: 'fallback-local',
       usedFile: file.originalname,
+      uploaded: uploadMeta,
       warning: `Gemini generation failed: ${err.message}`,
     });
   }
