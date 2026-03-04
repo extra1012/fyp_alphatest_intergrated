@@ -4,6 +4,7 @@ const Busboy = require('busboy');
 const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const admin = require('firebase-admin');
 const { initializeApp } = require('firebase/app');
 const { getStorage, ref, uploadBytes } = require('firebase/storage');
 
@@ -26,7 +27,11 @@ const FIREBASE_CONFIG = {
   appId: process.env.FIREBASE_APP_ID || 'your-app-id',
 };
 
+const FALLBACK_BUCKET = FIREBASE_CONFIG.projectId ? `${FIREBASE_CONFIG.projectId}.appspot.com` : null;
+
 let firebaseStorage = null;
+let adminStorage = null;
+let adminInitialized = false;
 
 function firebaseReady() {
   return Boolean(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.appId && FIREBASE_CONFIG.storageBucket && !FIREBASE_CONFIG.apiKey.startsWith('your-'));
@@ -40,17 +45,66 @@ function ensureStorage() {
   return firebaseStorage;
 }
 
+function ensureAdminStorage() {
+  if (adminStorage) return adminStorage;
+  const bucket = FIREBASE_CONFIG.storageBucket || FALLBACK_BUCKET;
+  if (!bucket) return null;
+
+  if (!adminInitialized) {
+    try {
+      if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        const json = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        admin.initializeApp({ credential: admin.credential.cert(json), storageBucket: bucket });
+      } else {
+        admin.initializeApp({ credential: admin.credential.applicationDefault(), storageBucket: bucket });
+      }
+      adminInitialized = true;
+    } catch (err) {
+      console.warn('Failed to initialize firebase-admin storage', err);
+      return null;
+    }
+  }
+
+  try {
+    adminStorage = admin.storage().bucket(bucket);
+  } catch (err) {
+    console.warn('Failed to acquire admin storage bucket', err);
+    adminStorage = null;
+  }
+  return adminStorage;
+}
+
 function sanitizeFilename(name) {
   return (name || 'upload').replace(/[^a-zA-Z0-9_.-]/g, '_');
 }
 
 async function uploadToFirebase(file) {
-  const storage = ensureStorage();
-  if (!storage) return null;
   const safeName = sanitizeFilename(file.originalname || 'upload.bin');
-  const storageRef = ref(storage, `uploads/${Date.now()}_${safeName}`);
-  await uploadBytes(storageRef, file.buffer, { contentType: file.mimetype || 'application/octet-stream' });
-  return { path: storageRef.fullPath, bucket: storageRef.bucket || FIREBASE_CONFIG.storageBucket, name: storageRef.name };
+  const objectPath = `uploads/${Date.now()}_${safeName}`;
+
+  try {
+    const adminBucket = ensureAdminStorage();
+    if (adminBucket) {
+      await adminBucket.file(objectPath).save(file.buffer, {
+        contentType: file.mimetype || 'application/octet-stream',
+        resumable: false,
+      });
+      return { path: objectPath, bucket: adminBucket.name, name: safeName, via: 'admin' };
+    }
+  } catch (err) {
+    console.warn('Admin upload failed, will try client SDK', err.message || err);
+  }
+
+  try {
+    const storage = ensureStorage();
+    if (!storage) return null;
+    const storageRef = ref(storage, objectPath);
+    await uploadBytes(storageRef, file.buffer, { contentType: file.mimetype || 'application/octet-stream' });
+    return { path: storageRef.fullPath, bucket: storageRef.bucket || FIREBASE_CONFIG.storageBucket || FALLBACK_BUCKET, name: storageRef.name, via: 'client' };
+  } catch (err) {
+    console.warn('Client upload failed', err.message || err);
+    return null;
+  }
 }
 
 function parseMultipartRequest(req) {

@@ -1,0 +1,8 @@
+.git/
+.gemini/
+.vscode/
+node_modules/
+.gitignore
+npm-debug.log
+*.local
+.DS_Store
