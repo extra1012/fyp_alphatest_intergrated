@@ -11,7 +11,8 @@ const { getStorage, ref, uploadBytes } = require('firebase/storage');
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(express.static(__dirname));
+// Serve frontend from /public so Cloud Run can host the UI directly
+app.use(express.static(path.join(__dirname, 'public')));
 
 const OUTPUT_FOLDER = path.join(__dirname, 'generated');
 const MAX_SIZE = 16 * 1024 * 1024; // 16MB
@@ -349,11 +350,11 @@ async function cleanupUpload(uploadMeta) {
 }
 
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('/generator', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'generator.html'));
+  res.sendFile(path.join(__dirname, 'public', 'generator.html'));
 });
 
 app.post('/generate-game', async (req, res) => {
