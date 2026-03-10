@@ -107,6 +107,20 @@ async function uploadToFirebase(file) {
   }
 }
 
+async function deleteFromFirebase(uploadMeta) {
+  if (!uploadMeta || !uploadMeta.path) return false;
+  try {
+    const bucketName = uploadMeta.bucket || FIREBASE_CONFIG.storageBucket || FALLBACK_BUCKET;
+    if (!bucketName) return false;
+    const bucket = admin.storage().bucket(bucketName);
+    await bucket.file(uploadMeta.path).delete({ ignoreNotFound: true });
+    return true;
+  } catch (err) {
+    console.warn('Failed to delete uploaded file', err.message || err);
+    return false;
+  }
+}
+
 function parseMultipartRequest(req) {
   return new Promise((resolve, reject) => {
     const busboy = Busboy({ headers: req.headers, limits: { fileSize: MAX_SIZE, files: 1 } });
@@ -252,7 +266,8 @@ async function generateQuestionsWithGemini(prompt, count = 10, docContext = null
   const systemPrompt = [
     `Summarize the provided document, find key points, and create ${count} questions within 18 words (no duplicates question).`,
     `If there are more than ${count} key points, randomly pick ${count}; otherwise keep all points but still output ${count} questions (repeat key ideas if needed without duplication).`,
-    'Each question must have exactly 2 concise options (plain text, no A:/B: prefixes) and one correct answer.',
+    'Each question must have exactly 2 concise options (plain text, no A:/B: prefixes) and one correct answer. If the only sensible options are yes/no, include both and balance correctness so yes and no are each used as the correct answer across the set (do not default to yes).',
+    'Do not create questions about file types, file names, languages used, fonts, formatting, or other document metadata.',
     'Return strict JSON only, no prose:',
     '{"questions":[{"id":"q-1","question":"...","options":["option text 1","option text 2"],"answerIndex":0}]}',
     'answerIndex must be 0 for the first option or 1 for the second; vary which option is correct and set answerIndex to the correct option (do not always return 0).',
@@ -323,6 +338,16 @@ ${prompt || 'document only'}.`,
   };
 }
 
+async function cleanupUpload(uploadMeta) {
+  if (!uploadMeta) return null;
+  try {
+    return { deleted: await deleteFromFirebase(uploadMeta) };
+  } catch (err) {
+    console.warn('Cleanup delete failed', err.message || err);
+    return { deleted: false, error: err.message || String(err) };
+  }
+}
+
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -352,13 +377,16 @@ app.post('/generate-game', async (req, res) => {
 });
 
 app.post('/api/generate-questions', async (req, res) => {
+  console.log('[api] /api/generate-questions start');
   let file;
   let fields;
   try {
     const parsed = await parseMultipartRequest(req);
     file = parsed.file;
     fields = parsed.fields;
+    console.log('[api] parsed multipart', { size: file?.size, fields });
   } catch (err) {
+    console.warn('[api] multipart parse error', err.message || err);
     const status = err.message.toLowerCase().includes('file') ? 400 : 500;
     return res.status(status).json({ error: err.message || 'Upload failed' });
   }
@@ -372,6 +400,7 @@ app.post('/api/generate-questions', async (req, res) => {
   let uploadMeta = null;
   try {
     uploadMeta = await uploadToFirebase(file);
+    console.log('[api] uploaded to storage', uploadMeta);
   } catch (err) {
     console.warn('Firebase upload failed, continuing without cloud copy', err);
   }
@@ -394,22 +423,29 @@ app.post('/api/generate-questions', async (req, res) => {
     }
 
     const result = await generateQuestionsWithGemini(prompt, count, docContext);
-    res.json({
+    console.log('[api] gemini success', { count: result?.total_question });
+    const cleanup = await cleanupUpload(uploadMeta);
+    console.log('[api] cleanup done', cleanup);
+    return res.json({
       message: `Generated ${result.total_question} questions`,
       result,
       note: 'live-gemini',
       usedFile: file.originalname,
       uploaded: uploadMeta,
+      cleanup,
     });
   } catch (err) {
-    console.error('Gemini generation failed, serving fallback', err);
+    console.error('[api] gemini failed, serving fallback', err.message || err);
     const fallback = generateQuestionsFromFile(file.buffer, count);
+    const cleanup = await cleanupUpload(uploadMeta);
+    console.log('[api] cleanup after fallback', cleanup);
     res.status(200).json({
       message: `Generated ${fallback.total_question} fallback questions`,
       result: fallback,
       note: 'fallback-local',
       usedFile: file.originalname,
       uploaded: uploadMeta,
+      cleanup,
       warning: `Gemini generation failed: ${err.message}`,
     });
   }
