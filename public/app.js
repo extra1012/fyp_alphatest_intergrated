@@ -2,11 +2,11 @@ import { createGate, createEndGate } from './gate.js';
 
 const CONFIG = {
   googleForm: 'https://docs.google.com/forms/d/e/1FAIpQLSeK2rPrrUUo1YnIfrDUVive9NZjUZ-8cxWxOsWiEfUyKhqlug/viewform?usp=publish-editor',
-  runSpeedMs: 0.0060, // forward speed per ms (~20% slower than before to add reaction time)
+  runSpeedMs: 0.0045, // forward speed per ms 
   strafeSpeedMs: 0.02, // left/right speed per ms
   gateSpacing: 22,
   trackWidth: 16,
-  groundLength: 240,
+  groundLength: 800, // extended so tracks stay visible with 20 questions
   startZ: -60,
 };
 
@@ -31,6 +31,7 @@ const ui = {
   setupPanel: document.getElementById('setupPanel'),
   promptInput: document.getElementById('promptInput'),
   countInput: document.getElementById('countInput'),
+  speedSelect: document.getElementById('speedSelect'),
   generateBtn: document.getElementById('generateBtn'),
   startBtn: document.getElementById('startBtn'),
   resetBtn: document.getElementById('resetBtn'),
@@ -82,6 +83,13 @@ function bindUI() {
   ui.retryBtn.addEventListener('click', () => startGame(true));
   ui.regenBtn.addEventListener('click', () => resetSetup());
   ui.surveyBtn.addEventListener('click', () => window.open(CONFIG.googleForm, '_blank'));
+  if (ui.speedSelect) {
+    ui.speedSelect.value = ui.speedSelect.value || 'normal';
+    applySpeed(ui.speedSelect.value);
+    ui.speedSelect.addEventListener('change', () => {
+      applySpeed(ui.speedSelect.value);
+    });
+  }
 
   if (ui.questionText) {
     ui.questionText.style.whiteSpace = 'pre-line';
@@ -283,6 +291,22 @@ function updateProgress(label, value) {
     progressValue = Math.max(progressValue, Math.min(98, value));
     ui.progressFill.style.width = `${progressValue}%`;
   }
+}
+
+function applySpeed(option) {
+  switch (option) {
+    case 'fast':
+      CONFIG.runSpeedMs = 0.0055;
+      break;
+    case 'slow':
+      CONFIG.runSpeedMs = 0.0035;
+      break;
+    case 'normal':
+    default:
+      CONFIG.runSpeedMs = 0.0045;
+      break;
+  }
+  setRunStatus(`Speed: ${option}`);
 }
 
 function finishProgress() {

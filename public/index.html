@@ -123,8 +123,6 @@
     </div>
   </div>
 
-  <button id="helpFab" class="help-fab" type="button">Help / Manual</button>
-
   <div id="setupPanel" class="panel">
   <h1>Build Your Study GO </h1>
     <p class="helper">
@@ -144,6 +142,14 @@
       <div>
         <label for="countInput">Number of questions</label>
         <input id="countInput" type="number" min="2" max="20" value="8" />
+      </div>
+      <div style="margin-left:auto;">
+        <label for="speedSelect">Car speed</label>
+        <select id="speedSelect" style="width:140px; padding:9px; border-radius:8px; border:1px solid rgba(255,255,255,0.08); background:#0d1525; color: var(--text);">
+          <option value="fast">Fast</option>
+          <option value="normal" selected>Normal</option>
+          <option value="slow">Slow</option>
+        </select>
       </div>
       <button id="generateBtn">Generate quiz</button>
     </div>
@@ -195,7 +201,6 @@
     (function() {
       const overlay = document.getElementById('manualOverlay');
       const closeBtn = document.getElementById('closeOverlay');
-      const helpFab = document.getElementById('helpFab');
       const openManual = document.getElementById('openManual');
 
       const hideOverlay = () => {
@@ -216,9 +221,6 @@
         window.scrollTo(0, 0);
       };
 
-      if (overlay && helpFab) {
-        helpFab.addEventListener('click', showOverlay);
-      }
       if (overlay && openManual) {
         openManual.addEventListener('click', showOverlay);
       }
