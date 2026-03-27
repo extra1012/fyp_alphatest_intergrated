@@ -4,9 +4,9 @@ const Busboy = require('busboy');
 const fs = require('fs');
 const path = require('path');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const admin = require('firebase-admin');
-const { initializeApp } = require('firebase/app');
-const { getStorage, ref, uploadBytes } = require('firebase/storage');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const JSZip = require('jszip');
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -19,107 +19,75 @@ const MAX_SIZE = 16 * 1024 * 1024; // 16MB
 const ALLOWED_EXT = new Set(['pdf', 'docx', 'pptx']);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL;
-const FIREBASE_CONFIG = {
-  apiKey: process.env.FIREBASE_API_KEY || 'your-api-key',
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || 'your-project.firebaseapp.com',
-  projectId: process.env.FIREBASE_PROJECT_ID || 'your-project-id',
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || 'your-project.appspot.com',
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || 'your-messaging-sender-id',
-  appId: process.env.FIREBASE_APP_ID || 'your-app-id',
-};
 
-const FALLBACK_BUCKET = FIREBASE_CONFIG.projectId ? `${FIREBASE_CONFIG.projectId}.appspot.com` : null;
-
-let firebaseStorage = null;
-let adminStorage = null;
-let adminInitialized = false;
-
-function firebaseReady() {
-  return Boolean(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.appId && FIREBASE_CONFIG.storageBucket && !FIREBASE_CONFIG.apiKey.startsWith('your-'));
+function detectFileType(filename = '', mimetype = '') {
+  const ext = (filename.split('.').pop() || '').toLowerCase();
+  if (ALLOWED_EXT.has(ext)) return ext;
+  if (mimetype.includes('pdf')) return 'pdf';
+  if (mimetype.includes('presentation') || mimetype.includes('ppt')) return 'pptx';
+  if (mimetype.includes('word') || mimetype.includes('doc')) return 'docx';
+  return null;
 }
 
-function ensureStorage() {
-  if (firebaseStorage) return firebaseStorage;
-  if (!firebaseReady()) return null;
-  const fbApp = initializeApp(FIREBASE_CONFIG);
-  firebaseStorage = getStorage(fbApp);
-  return firebaseStorage;
+async function extractPdfText(buffer) {
+  const data = await pdfParse(buffer);
+  return (data.text || '').trim();
 }
 
-function ensureAdminStorage() {
-  if (adminStorage) return adminStorage;
-  const bucket = FIREBASE_CONFIG.storageBucket || FALLBACK_BUCKET;
-  if (!bucket) return null;
+async function extractDocxText(buffer) {
+  const result = await mammoth.extractRawText({ buffer });
+  return (result.value || '').trim();
+}
 
-  if (!adminInitialized) {
-    try {
-      if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        const json = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-        admin.initializeApp({ credential: admin.credential.cert(json), storageBucket: bucket });
-      } else {
-        admin.initializeApp({ credential: admin.credential.applicationDefault(), storageBucket: bucket });
-      }
-      adminInitialized = true;
-    } catch (err) {
-      console.warn('Failed to initialize firebase-admin storage', err);
-      return null;
-    }
+async function extractPptxText(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const slideNames = Object.keys(zip.files).filter((name) => name.startsWith('ppt/slides/slide') && name.endsWith('.xml'));
+  const texts = [];
+  for (const name of slideNames) {
+    const xml = await zip.file(name).async('string');
+    const matches = xml.match(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g) || [];
+    matches.forEach((m) => {
+      const cleaned = m.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      if (cleaned) texts.push(cleaned);
+    });
   }
-
-  try {
-    adminStorage = admin.storage().bucket(bucket);
-  } catch (err) {
-    console.warn('Failed to acquire admin storage bucket', err);
-    adminStorage = null;
-  }
-  return adminStorage;
+  return texts.join(' ').trim();
 }
 
-function sanitizeFilename(name) {
-  return (name || 'upload').replace(/[^a-zA-Z0-9_.-]/g, '_');
-}
-
-async function uploadToFirebase(file) {
-  const safeName = sanitizeFilename(file.originalname || 'upload.bin');
-  const objectPath = `uploads/${Date.now()}_${safeName}`;
-
+async function extractTextFromFile(file, type) {
+  if (!file || !file.buffer) return '';
   try {
-    const adminBucket = ensureAdminStorage();
-    if (adminBucket) {
-      await adminBucket.file(objectPath).save(file.buffer, {
-        contentType: file.mimetype || 'application/octet-stream',
-        resumable: false,
-      });
-      return { path: objectPath, bucket: adminBucket.name, name: safeName, via: 'admin' };
+    switch (type) {
+      case 'pdf':
+        return await extractPdfText(file.buffer);
+      case 'docx':
+        return await extractDocxText(file.buffer);
+      case 'pptx':
+        return await extractPptxText(file.buffer);
+      default:
+        return '';
     }
   } catch (err) {
-    console.warn('Admin upload failed, will try client SDK', err.message || err);
-  }
-
-  try {
-    const storage = ensureStorage();
-    if (!storage) return null;
-    const storageRef = ref(storage, objectPath);
-    await uploadBytes(storageRef, file.buffer, { contentType: file.mimetype || 'application/octet-stream' });
-    return { path: storageRef.fullPath, bucket: storageRef.bucket || FIREBASE_CONFIG.storageBucket || FALLBACK_BUCKET, name: storageRef.name, via: 'client' };
-  } catch (err) {
-    console.warn('Client upload failed', err.message || err);
-    return null;
+    console.warn(`Text extraction failed for ${type}`, err.message || err);
+    return '';
   }
 }
 
-async function deleteFromFirebase(uploadMeta) {
-  if (!uploadMeta || !uploadMeta.path) return false;
-  try {
-    const bucketName = uploadMeta.bucket || FIREBASE_CONFIG.storageBucket || FALLBACK_BUCKET;
-    if (!bucketName) return false;
-    const bucket = admin.storage().bucket(bucketName);
-    await bucket.file(uploadMeta.path).delete({ ignoreNotFound: true });
-    return true;
-  } catch (err) {
-    console.warn('Failed to delete uploaded file', err.message || err);
-    return false;
-  }
+function buildDocContext(file, type, text) {
+  if (!text) return null;
+  const hints = {
+    pdf: 'Focus on document body text; ignore PDF metadata such as fonts, MediaBox, annotations.',
+    docx: 'Use visible document text only; ignore styling metadata.',
+    pptx: 'Use slide text and bullets; ignore theme/style metadata.',
+  };
+  const maxLen = 12000;
+  return {
+    filename: file.originalname,
+    mimetype: file.mimetype,
+    type,
+    text: text.slice(0, maxLen),
+    hint: hints[type] || '',
+  };
 }
 
 function parseMultipartRequest(req) {
@@ -264,6 +232,17 @@ async function generateQuestionsWithGemini(prompt, count = 10, docContext = null
     throw new Error('Missing GEMINI_API_KEY');
   }
 
+  const docBlock = docContext
+    ? [
+        `Document type: ${docContext.type || 'unknown'}`,
+        docContext.hint ? `Hint: ${docContext.hint}` : null,
+        'Document text (truncated):',
+        docContext.text,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : 'No document provided; do not generate.';
+
   const systemPrompt = [
     'Summarize the provided document and extract its key points.',
     `Generate exactly ${count} questions based on those key points. Each question must:`,
@@ -296,14 +275,7 @@ async function generateQuestionsWithGemini(prompt, count = 10, docContext = null
     '}',
     'After producing the JSON, silently review your output to ensure every rule is followed. If any rule is violated, regenerate the JSON so the final output is fully compliant.',
     `Preset prompt:\n${prompt || 'document only'}.`,
-    docContext
-      ? [
-          'Document context (base64, truncated to ~4k chars):',
-          `Filename: ${docContext.filename}`,
-          `MIME: ${docContext.mimetype}`,
-          docContext.base64,
-        ].join('\n')
-      : 'No document provided; do not generate.',
+    docBlock,
   ].join('\n');
   // Attempt with SDK only; if it fails, let the caller serve fallback without extra network calls
   let parsed;
@@ -361,16 +333,6 @@ async function generateQuestionsWithGemini(prompt, count = 10, docContext = null
   };
 }
 
-async function cleanupUpload(uploadMeta) {
-  if (!uploadMeta) return null;
-  try {
-    return { deleted: await deleteFromFirebase(uploadMeta) };
-  } catch (err) {
-    console.warn('Cleanup delete failed', err.message || err);
-    return { deleted: false, error: err.message || String(err) };
-  }
-}
-
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -383,15 +345,8 @@ app.post('/generate-game', async (req, res) => {
   try {
     const { file, fields } = await parseMultipartRequest(req);
     const questionNumbers = Number(fields.question_numbers || 10);
-    let uploadMeta = null;
-    try {
-      uploadMeta = await uploadToFirebase(file);
-    } catch (err) {
-      console.warn('Firebase upload failed, continuing without cloud copy', err);
-    }
-
     const result = generateQuestionsFromFile(file.buffer, questionNumbers);
-    res.json({ message: `Generated ${result.total_question} questions`, result, filename: file.originalname, uploaded: uploadMeta });
+    res.json({ message: `Generated ${result.total_question} questions`, result, filename: file.originalname });
   } catch (err) {
     const msg = err.message || '';
     const status = msg.toLowerCase().includes('file') || msg.toLowerCase().includes('upload') ? 400 : 500;
@@ -420,25 +375,32 @@ app.post('/api/generate-questions', async (req, res) => {
     return res.status(400).json({ error: 'Upload a pdf/docx/pptx file to generate questions' });
   }
 
-  let uploadMeta = null;
-  try {
-    uploadMeta = await uploadToFirebase(file);
-    console.log('[api] uploaded to storage', uploadMeta);
-  } catch (err) {
-    console.warn('Firebase upload failed, continuing without cloud copy', err);
+  const fileType = detectFileType(file.originalname, file.mimetype);
+  if (!fileType) {
+    return res.status(400).json({ error: 'Unsupported file type (pdf/docx/pptx only)' });
   }
 
-  let docContext = null;
+  let extractedText = '';
   try {
-    const base64 = file.buffer.toString('base64').slice(0, 4000); // truncate to keep payload small
-    docContext = {
-      filename: file.originalname,
-      mimetype: file.mimetype,
-      base64,
-    };
+    extractedText = await extractTextFromFile(file, fileType);
   } catch (err) {
-    console.warn('Failed to read uploaded file for Gemini prompt:', err);
+    console.warn('[api] text extraction failed', err.message || err);
   }
+
+  if (!extractedText || extractedText.length < 30) {
+    console.warn('[api] empty extracted text; serving fallback');
+    const fallback = generateQuestionsFromFile(file.buffer, count);
+    return res.status(200).json({
+      message: `Generated ${fallback.total_question} fallback questions`,
+      result: fallback,
+      note: 'fallback-extraction',
+      usedFile: file.originalname,
+      fileType,
+      warning: 'Text extraction failed or returned too little text',
+    });
+  }
+
+  const docContext = buildDocContext(file, fileType, extractedText);
 
   try {
     if (!GEMINI_API_KEY) {
@@ -447,28 +409,22 @@ app.post('/api/generate-questions', async (req, res) => {
 
     const result = await generateQuestionsWithGemini(prompt, count, docContext);
     console.log('[api] gemini success', { count: result?.total_question });
-    const cleanup = await cleanupUpload(uploadMeta);
-    console.log('[api] cleanup done', cleanup);
     return res.json({
       message: `Generated ${result.total_question} questions`,
       result,
       note: 'live-gemini',
       usedFile: file.originalname,
-      uploaded: uploadMeta,
-      cleanup,
+      fileType,
     });
   } catch (err) {
     console.error('[api] gemini failed, serving fallback', err.message || err);
     const fallback = generateQuestionsFromFile(file.buffer, count);
-    const cleanup = await cleanupUpload(uploadMeta);
-    console.log('[api] cleanup after fallback', cleanup);
     res.status(200).json({
       message: `Generated ${fallback.total_question} fallback questions`,
       result: fallback,
       note: 'fallback-local',
       usedFile: file.originalname,
-      uploaded: uploadMeta,
-      cleanup,
+      fileType,
       warning: `Gemini generation failed: ${err.message}`,
     });
   }
@@ -510,17 +466,6 @@ app.get('/api/questions/latest', (_req, res) => {
   res.json({ questions: normalized });
 });
 
-let firebaseHandler = null;
-if (process.env.FIREBASE_CONFIG) {
-  try {
-    // Optional Firebase Functions export so the same Express app can run on Firebase Hosting rewrites.
-    const functions = require('firebase-functions');
-    firebaseHandler = functions.https.onRequest(app);
-  } catch (err) {
-    console.warn('firebase-functions not available; skipping Firebase export');
-  }
-}
-
 // Only start the server directly when running this file, not when imported (e.g., Netlify Functions)
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
@@ -530,7 +475,3 @@ if (require.main === module) {
 }
 
 module.exports = app;
-if (firebaseHandler) {
-  module.exports.firebase = firebaseHandler;
-  module.exports.api = firebaseHandler;
-}

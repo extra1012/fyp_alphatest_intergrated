@@ -124,7 +124,7 @@ function bindUI() {
 
 function createScene(engine, canvas) {
   const scene = new BABYLON.Scene(engine);
-  scene.clearColor = new BABYLON.Color4(0.62, 0.84, 1, 1);
+  scene.clearColor = new BABYLON.Color4(0.02, 0.03, 0.08, 1); // deep night sky
 
   camera = new BABYLON.ArcRotateCamera('camera', BABYLON.Tools.ToRadians(-95), BABYLON.Tools.ToRadians(50), 14, new BABYLON.Vector3(0, 1.3, CONFIG.startZ + 4), scene);
   camera.lowerRadiusLimit = 12;
@@ -136,11 +136,13 @@ function createScene(engine, canvas) {
   // We will drive camera position manually; do not attach user controls.
 
   const light = new BABYLON.HemisphericLight('light', new BABYLON.Vector3(0, 1, 0.2), scene);
-  light.intensity = 0.9;
+  light.intensity = 0.35;
 
   const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.4, -1, -0.2), scene);
   sun.position = new BABYLON.Vector3(0, 25, 10);
-  sun.intensity = 0.7;
+  sun.intensity = 0.25;
+
+  createStarDome(scene);
 
   const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: CONFIG.trackWidth + 2, height: CONFIG.groundLength }, scene);
   const gMat = new BABYLON.StandardMaterial('ground-mat', scene);
@@ -269,6 +271,25 @@ function createRoadMarker(text, position, size = 3, tint = new BABYLON.Color3(1,
   }
   plane.isPickable = false;
   return plane;
+}
+
+function createStarDome(scene) {
+  const size = 1024;
+  const texture = new BABYLON.DynamicTexture('star-sky', { width: size, height: size }, scene, false);
+  const ctx = texture.getContext();
+  ctx.fillStyle = '#02030a';
+  ctx.fillRect(0, 0, size, size);
+
+  const mat = new BABYLON.StandardMaterial('star-sky-mat', scene);
+  mat.diffuseColor = BABYLON.Color3.Black();
+  mat.emissiveTexture = texture;
+  mat.backFaceCulling = false;
+  mat.disableLighting = true;
+
+  const dome = BABYLON.MeshBuilder.CreateSphere('star-sky-dome', { diameter: 1400, segments: 16 }, scene);
+  dome.material = mat;
+  dome.scaling = new BABYLON.Vector3(-1, 1, 1); // flip normals to look inward
+  dome.isPickable = false;
 }
 
 function startProgress(label = 'Preparing...') {
@@ -763,8 +784,8 @@ function finishRun() {
 }
 
 function showResult() {
-  const pts = results.points || 0;
-  const score = `${pts} points  •  ${results.correct} / ${results.total} correct`;
+  const pct = results.total ? Math.round((results.correct / results.total) * 100) : 0;
+  const score = `${pct}% correct  •  ${results.correct} / ${results.total} correct`;
   ui.scoreText.textContent = score;
   ui.resultPanel.classList.remove('hidden');
 }
